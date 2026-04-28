@@ -10,7 +10,7 @@ class Settings(BaseSettings):
     """Application settings loaded from environment variables."""
     
     # API Keys
-    serpapi_key: str
+    serper_api_key: str
     firecrawl_api_key: str
     
     # AWS Bedrock Configuration
