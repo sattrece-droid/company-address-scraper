@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { Suspense, useEffect, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { getJobStatus } from "@/lib/api";
 import { StatusBadge } from "@/components/StatusBadge";
@@ -28,7 +28,7 @@ interface CompanyResult {
   timestamp: string;
 }
 
-export default function PreviewPage() {
+function PreviewContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const jobId = searchParams.get("job_id");
@@ -315,5 +315,13 @@ export default function PreviewPage() {
         </div>
       </div>
     </div>
+  );
+}
+
+export default function PreviewPage() {
+  return (
+    <Suspense fallback={<div className="text-center py-12"><Spinner label="Loading..." /></div>}>
+      <PreviewContent />
+    </Suspense>
   );
 }

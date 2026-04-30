@@ -38,6 +38,7 @@ class JobStatusResponse(BaseModel):
     results: Optional[List[CompanyResult]] = None
     completed_at: Optional[str] = None
     download_url: Optional[str] = None
+    statistics: Optional[Dict[str, Any]] = None
 
 
 class BatchJobRequest(BaseModel):
@@ -48,4 +49,5 @@ class BatchJobRequest(BaseModel):
 class JobCreatedResponse(BaseModel):
     """Response when a job is successfully created."""
     job_id: str
+    total_companies: int
     message: str

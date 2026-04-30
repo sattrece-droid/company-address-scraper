@@ -148,11 +148,27 @@ class BrowserAutomation:
             'input[id*="zip"]',
             'input[placeholder*="zip"]',
             'input[aria-label*="zip"]',
+            'input[placeholder*="Zip"]',
+            'input[aria-label*="Zip"]',
 
             # Postal code variants
             'input[name*="postal"]',
             'input[id*="postal"]',
             'input[placeholder*="postal"]',
+
+            # Location/city/search inputs (Home Depot, etc.)
+            'input[placeholder*="city"]',
+            'input[placeholder*="City"]',
+            'input[placeholder*="location"]',
+            'input[placeholder*="Location"]',
+            'input[placeholder*="address"]',
+            'input[placeholder*="Address"]',
+            'input[id*="location"]',
+            'input[name*="location"]',
+            'input[id*="search"]',
+            'input[name*="search"]',
+            'input[placeholder*="Enter"]',
+            'input[type="search"]',
 
             # Generic text input (last resort)
             'input[type="text"]',
@@ -223,6 +239,14 @@ class BrowserAutomation:
             except Exception as e:
                 logger.debug(f"Selector {selector} failed: {str(e)}")
                 continue
+
+        # Last resort: press Enter (Starbucks and other keyboard-submit locators)
+        try:
+            await page.keyboard.press("Enter")
+            logger.info("Pressed Enter as submit fallback")
+            return True
+        except Exception as e:
+            logger.debug(f"Enter key press failed: {str(e)}")
 
         return False
 

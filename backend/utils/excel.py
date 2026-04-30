@@ -35,7 +35,8 @@ class ExcelHandler:
             column_mapping = {
                 'company_name': ['company name', 'company', 'name', 'business name'],
                 'zip_code': ['zip code', 'zip', 'zipcode', 'postal code', 'postalcode'],
-                'website': ['website', 'web', 'url', 'site']
+                'website': ['website', 'web', 'url', 'site'],
+                'mode': ['mode', 'lookup mode', 'search mode']
             }
             
             # Find actual column names
@@ -64,12 +65,15 @@ class ExcelHandler:
                 
                 companies.append({
                     'company_name': str(company_name).strip(),
-                    'zip_code': str(row[actual_columns['zip_code']]).strip() 
+                    'zip_code': str(row[actual_columns['zip_code']]).strip()
                                 if 'zip_code' in actual_columns and not pd.isna(row[actual_columns['zip_code']])
                                 else None,
                     'website': str(row[actual_columns['website']]).strip()
                               if 'website' in actual_columns and not pd.isna(row[actual_columns['website']])
-                              else None
+                              else None,
+                    'mode': str(row[actual_columns['mode']]).strip().lower()
+                            if 'mode' in actual_columns and not pd.isna(row[actual_columns['mode']])
+                            else None
                 })
             
             return companies
@@ -115,6 +119,7 @@ class ExcelHandler:
             "Input Zip Code",
             "Status",
             "Match Confidence",
+            "Full Address",
             "Location Name",
             "Street Address",
             "City",
@@ -149,17 +154,19 @@ class ExcelHandler:
             if addresses:
                 # Write one row per location
                 for address in addresses:
+                    full_address = ExcelHandler._build_full_address(address)
                     ws.cell(row=current_row, column=1, value=company_name)
                     ws.cell(row=current_row, column=2, value=input_zip)
                     ws.cell(row=current_row, column=3, value=status)
                     ws.cell(row=current_row, column=4, value=confidence)
-                    ws.cell(row=current_row, column=5, value=address.get('name', ''))
-                    ws.cell(row=current_row, column=6, value=address.get('address', ''))
-                    ws.cell(row=current_row, column=7, value=address.get('city', ''))
-                    ws.cell(row=current_row, column=8, value=address.get('state', ''))
-                    ws.cell(row=current_row, column=9, value=address.get('zip', ''))
-                    ws.cell(row=current_row, column=10, value=address.get('country', ''))
-                    ws.cell(row=current_row, column=11, value=cached)
+                    ws.cell(row=current_row, column=5, value=full_address)
+                    ws.cell(row=current_row, column=6, value=address.get('name', ''))
+                    ws.cell(row=current_row, column=7, value=address.get('address', ''))
+                    ws.cell(row=current_row, column=8, value=address.get('city', ''))
+                    ws.cell(row=current_row, column=9, value=address.get('state', ''))
+                    ws.cell(row=current_row, column=10, value=address.get('zip', ''))
+                    ws.cell(row=current_row, column=11, value=address.get('country', ''))
+                    ws.cell(row=current_row, column=12, value=cached)
                     current_row += 1
             else:
                 # No addresses found - write company info only
@@ -167,7 +174,7 @@ class ExcelHandler:
                 ws.cell(row=current_row, column=2, value=input_zip)
                 ws.cell(row=current_row, column=3, value=status)
                 ws.cell(row=current_row, column=4, value=confidence)
-                ws.cell(row=current_row, column=11, value=cached)
+                ws.cell(row=current_row, column=12, value=cached)
                 current_row += 1
         
         # Auto-adjust column widths
@@ -190,6 +197,17 @@ class ExcelHandler:
         wb.save(output_path)
         return output_path
     
+    @staticmethod
+    def _build_full_address(address: Dict[str, str]) -> str:
+        """Combine Street Address, City, State/Province, Zip Code into one string."""
+        parts = [
+            address.get('address', ''),
+            address.get('city', ''),
+            address.get('state', ''),
+            address.get('zip', ''),
+        ]
+        return ', '.join(p for p in parts if p)
+
     @staticmethod
     def validate_input_file(file_path: str) -> Dict[str, Any]:
         """

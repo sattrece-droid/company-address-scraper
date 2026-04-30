@@ -81,25 +81,32 @@ class AddressParser:
     
     def _build_extraction_prompt(self, content: str) -> str:
         """Build prompt for address extraction."""
-        return f"""Extract all physical location addresses from the following content.
+        return f"""Extract REAL physical location addresses from the following content.
+
+A REAL address must include a street number AND a street name (e.g. "123 Main St", "2875 M.L.K. Jr Blvd").
+
+DO NOT include:
+- Zip codes alone as the address (e.g. "90210" is NOT an address)
+- City/state-only entries with no street
+- Search input placeholders, filter UI labels, or "Find a store"-style text
+- The literal value "None" or empty/null entries
 
 For each location, extract:
 - name: Location/store/office name (if available)
-- address: Street address
+- address: Full street address (must contain a number + street name)
 - city: City name
 - state: State or province (2-letter code if US/Canada)
 - zip: Zip/postal code
 - country: Country (2-letter code if clear, or full name)
 
-Return ONLY a valid JSON array of objects. Do not include any explanation or markdown formatting.
+Return ONLY a valid JSON array of objects. No explanation, no markdown.
 
-Example output format:
+Example output:
 [
-  {{"name": "Main Office", "address": "123 Main St", "city": "New York", "state": "NY", "zip": "10001", "country": "US"}},
-  {{"name": "Branch Location", "address": "456 Oak Ave", "city": "Boston", "state": "MA", "zip": "02101", "country": "US"}}
+  {{"name": "Main Office", "address": "123 Main St", "city": "New York", "state": "NY", "zip": "10001", "country": "US"}}
 ]
 
-If no addresses are found, return an empty array: []
+If no real addresses are found, return: []
 
 Content to analyze:
 {content}"""
@@ -183,6 +190,17 @@ Content to analyze:
                 "error": f"Claude invocation error: {str(e)}"
             }
     
+    @staticmethod
+    def _looks_like_street_address(s: str) -> bool:
+        """A real street address has a leading/embedded number + a street-type word."""
+        if not s or len(s) < 5:
+            return False
+        import re as _re
+        if not _re.search(r"\d", s):
+            return False
+        street_words = r"(st|street|ave|avenue|blvd|boulevard|rd|road|dr|drive|ln|lane|way|ct|court|pkwy|parkway|hwy|highway|pl|place|ter|terrace|cir|circle|sq|square|trl|trail|loop|sr|route|rte)"
+        return bool(_re.search(rf"\b{street_words}\b", s, flags=_re.IGNORECASE)) or bool(_re.search(r"\d+\s+[A-Za-z]", s))
+
     def _parse_model_response(self, response_text: str) -> List[Dict[str, str]]:
         """
         Parse model response into structured address list.
@@ -212,18 +230,25 @@ Content to analyze:
                 if not isinstance(addr, dict):
                     continue
                 
-                # Ensure all fields are present (use empty string if missing)
+                def clean(val):
+                    s = str(val).strip() if val is not None else ""
+                    return "" if s.lower() in ("none", "null", "n/a", "-") else s
+
                 cleaned_addr = {
-                    "name": str(addr.get("name", "")).strip(),
-                    "address": str(addr.get("address", "")).strip(),
-                    "city": str(addr.get("city", "")).strip(),
-                    "state": str(addr.get("state", "")).strip(),
-                    "zip": str(addr.get("zip", "")).strip(),
-                    "country": str(addr.get("country", "")).strip()
+                    "name": clean(addr.get("name")),
+                    "address": clean(addr.get("address")),
+                    "city": clean(addr.get("city")),
+                    "state": clean(addr.get("state")),
+                    "zip": clean(addr.get("zip")),
+                    "country": clean(addr.get("country"))
                 }
                 
-                # Only include if at least address and city are present
-                if cleaned_addr["address"] and cleaned_addr["city"]:
+                # Drop the address field if it doesn't actually look like a street address
+                if cleaned_addr["address"] and not self._looks_like_street_address(cleaned_addr["address"]):
+                    cleaned_addr["address"] = ""
+
+                # Include if at least one meaningful field is present
+                if any([cleaned_addr["address"], cleaned_addr["city"], cleaned_addr["zip"]]):
                     cleaned_addresses.append(cleaned_addr)
             
             return cleaned_addresses
@@ -251,39 +276,42 @@ Content to analyze:
             URL of locations page if found
         """
         try:
-            prompt = f"""Analyze the following webpage content and identify the URL for the page that lists physical locations, stores, or offices.
+            prompt = f"""Find the store locator or locations page URL from this webpage.
 
-Look for links with text like:
-- Locations
-- Store Locator
-- Find a Store
-- Our Offices
-- Find a Location
-- Stores Near You
-
-Return ONLY the URL path or full URL. If multiple candidates exist, return the most likely one.
-If no locations page is found, return: NONE
+Rules:
+- Reply with ONLY the URL, nothing else
+- No explanation, no markdown, no extra text
+- If not found, reply with exactly: NONE
 
 Base URL: {base_url}
 
 Content:
-{homepage_content[:10000]}"""  # Limit content size
-            
+{homepage_content[:5000]}"""
+
             # Use Nova Micro for this task
             response = self._invoke_nova(prompt, self.model_id)
-            
+
             if response.get("success"):
-                url = response.get("content", "").strip()
-                
-                if url and url != "NONE":
-                    # Make absolute URL if needed
-                    if url.startswith("/"):
-                        url = base_url.rstrip("/") + url
-                    elif not url.startswith("http"):
-                        url = base_url.rstrip("/") + "/" + url
-                    
-                    return url
-            
+                raw = response.get("content", "").strip()
+
+                # Extract first URL-like token from response (handles verbose replies)
+                import re
+                url_match = re.search(r'https?://[^\s\'"<>]+|/[a-zA-Z0-9/_-]+', raw)
+                if url_match:
+                    url = url_match.group(0).rstrip(".,)")
+                elif raw and raw != "NONE" and not any(c in raw for c in [" ", "\n"]):
+                    url = raw
+                else:
+                    return None
+
+                # Make absolute URL if needed
+                if url.startswith("/"):
+                    url = base_url.rstrip("/") + url
+                elif not url.startswith("http"):
+                    url = base_url.rstrip("/") + "/" + url
+
+                return url
+
             return None
         
         except Exception:

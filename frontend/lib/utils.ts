@@ -16,8 +16,21 @@ export const formatStatus = (status: string): { label: string; color: string } =
 export const formatConfidence = (
   confidence: string | number
 ): { label: string; color: string } => {
-  const value = typeof confidence === "number" ? confidence : 0;
+  // Handle string values from backend (e.g., "high", "medium", "low")
+  if (typeof confidence === "string") {
+    const lowerConfidence = confidence.toLowerCase();
+    if (lowerConfidence === "high") {
+      return { label: "High", color: "text-green-600" };
+    } else if (lowerConfidence === "medium") {
+      return { label: "Medium", color: "text-yellow-600" };
+    } else if (lowerConfidence === "low") {
+      return { label: "Low", color: "text-orange-600" };
+    }
+    return { label: confidence, color: "text-gray-600" };
+  }
 
+  // Handle numeric values (0.0 - 1.0 scale)
+  const value = confidence;
   if (value >= 0.9) {
     return { label: "High", color: "text-green-600" };
   } else if (value >= 0.7) {

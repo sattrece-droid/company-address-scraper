@@ -37,7 +37,8 @@ class JobProcessor:
         self,
         company_name: str,
         zip_code: Optional[str] = None,
-        website: Optional[str] = None
+        website: Optional[str] = None,
+        mode: Optional[str] = None
     ) -> Dict[str, Any]:
         """
         Process a single company through the full pipeline.
@@ -50,8 +51,12 @@ class JobProcessor:
         Returns:
             Dict with processing results including addresses and status
         """
+        # Normalize zip code — Excel often gives "90210.0" as a float string
+        if zip_code:
+            zip_code = str(zip_code).split(".")[0].strip()
+
         logger.info(f"Processing: {company_name} (zip: {zip_code or 'N/A'})")
-        
+
         result = {
             "company_name": company_name,
             "input_zip_code": zip_code,
@@ -70,9 +75,68 @@ class JobProcessor:
                 result.update(cached_result.get("result", {}))
                 result["cached"] = True
                 return result
-            
+
+            # Step 1b: No-zip mode handlers (hq | top_locations | hq_expand)
+            if not zip_code:
+                effective_mode = (mode or "hq").lower()
+                logger.info(f"No zip provided — using mode={effective_mode} for {company_name}")
+
+                if effective_mode == "hq":
+                    hq_result = searcher.find_headquarters(company_name)
+                    self.cost_tracker["serpapi_calls"] += 1
+                    if hq_result.get("count", 0) > 0:
+                        addresses = hq_result["addresses"]
+                        result["addresses"] = addresses
+                        result.update(validator.assign_status(addresses, is_hq_only=True, website_found=True, locations_page_found=True))
+                        cache.set(company_name, result, result["status"], zip_code, None)
+                        return result
+
+                elif effective_mode == "top_locations":
+                    local_result = searcher.search_local_addresses(company_name, None)
+                    self.cost_tracker["serpapi_calls"] += 1
+                    if local_result.get("count", 0) > 0:
+                        addresses = local_result["addresses"]
+                        result["addresses"] = addresses
+                        result.update(validator.assign_status(addresses, website_found=True, locations_page_found=True))
+                        cache.set(company_name, result, result["status"], zip_code, None)
+                        return result
+
+                elif effective_mode == "hq_expand":
+                    hq_result = searcher.find_headquarters(company_name)
+                    self.cost_tracker["serpapi_calls"] += 1
+                    hq_city = hq_result.get("hq_city")
+                    addresses = list(hq_result.get("addresses", []))
+                    if hq_city:
+                        # Use city in query as the geo anchor
+                        local_result = searcher.search_local_addresses(f"{company_name} {hq_city}", None)
+                        self.cost_tracker["serpapi_calls"] += 1
+                        addresses.extend(local_result.get("addresses", []))
+                    if addresses:
+                        result["addresses"] = addresses
+                        result.update(validator.assign_status(addresses, website_found=True, locations_page_found=True))
+                        cache.set(company_name, result, result["status"], zip_code, None)
+                        return result
+
+                logger.info(f"No-zip mode '{effective_mode}' returned 0 — falling through to scrape pipeline")
+
+            # Step 1c: When zip is provided, prefer Serper local search (geo-targeted, reliable)
+            if zip_code:
+                logger.info(f"Trying Serper local search first (zip={zip_code}) for {company_name}")
+                local_result = searcher.search_local_addresses(company_name, zip_code)
+                self.cost_tracker["serpapi_calls"] += 1
+                if local_result.get("count", 0) >= 3:
+                    addresses = local_result["addresses"]
+                    logger.info(f"Serper local search found {len(addresses)} addresses — using as primary")
+                    result["addresses"] = addresses
+                    result.update(validator.assign_status(addresses, input_zip=zip_code, website_found=True, locations_page_found=True))
+                    cache.set(company_name, result, result["status"], zip_code, None)
+                    return result
+                logger.info(f"Serper local returned {local_result.get('count', 0)} — falling back to scrape pipeline")
+
             # Step 2: Find website (if not provided)
             if website:
+                if not website.startswith("http"):
+                    website = "https://" + website
                 logger.info(f"Using provided website: {website}")
                 company_website = website
             else:
@@ -124,9 +188,19 @@ class JobProcessor:
                 logger.info(f"Trying SerpAPI site search for locations page")
                 search_result = searcher.find_locations_page(company_website)
                 self.cost_tracker["serpapi_calls"] += 1
-                
+
                 if search_result.get("success"):
-                    locations_url = search_result.get("url")
+                    candidate = search_result.get("url", "")
+                    # Skip content/category pages (e.g. /c/, /kp/, /kh/) — not real locators
+                    content_page_markers = ["/c/", "/kp/", "/kh/", "/kb/", "/cp/"]
+                    if any(m in candidate for m in content_page_markers):
+                        logger.warning(f"Skipping content-category URL from search: {candidate}")
+                        # Try a more targeted search
+                        better = searcher.find_locations_page(company_website, search_terms="store finder find a store near me")
+                        self.cost_tracker["serpapi_calls"] += 1
+                        if better.get("success"):
+                            candidate = better.get("url", "")
+                    locations_url = candidate
             
             # If still no locations page, try contact/about page
             if not locations_url:
@@ -157,12 +231,26 @@ class JobProcessor:
             self.cost_tracker["firecrawl_calls"] += 1
             
             if not locations_result.get("success"):
-                result.update(validator.assign_status(
-                    [], website_found=True, locations_page_found=True
-                ))
+                logger.warning(f"Firecrawl failed on locations page for {company_name}: {locations_result.get('error')}")
+                if zip_code:
+                    # Firecrawl blocked — try Playwright directly on the locations page
+                    logger.info(f"Trying Playwright directly on locations page after Firecrawl failure")
+                    playwright_result = await browser.scrape_with_playwright(locations_url, zip_code)
+                    self.cost_tracker["playwright_calls"] += 1
+                    if playwright_result.get("success"):
+                        pw_parse = parser.parse_addresses(playwright_result.get("html", ""))
+                        if not pw_parse.get("success") or pw_parse.get("count", 0) == 0:
+                            pw_parse = parser.parse_addresses(playwright_result.get("html", ""), use_fallback=True)
+                        addresses = pw_parse.get("addresses", [])
+                        result["addresses"] = addresses
+                        logger.info(f"Playwright direct scrape parsed {len(addresses)} addresses")
+                        result.update(validator.assign_status(addresses, input_zip=zip_code, website_found=True, locations_page_found=True))
+                        cache.set(company_name, result, result["status"], zip_code, company_website)
+                        return result
+                result.update(validator.assign_status([], website_found=True, locations_page_found=True))
                 cache.set(company_name, result, result["status"], zip_code, company_website)
                 return result
-            
+
             locations_html = locations_result.get("html", "")
             
             # Step 6: Detect if interactive form
@@ -184,9 +272,17 @@ class JobProcessor:
 
                 if not playwright_result.get("success"):
                     logger.warning(f"Playwright failed: {playwright_result.get('error')}")
-                    result.update(validator.assign_status(
-                        [], input_zip=zip_code, is_interactive=True
-                    ))
+                    logger.info(f"Playwright failed — trying Serper local search for {company_name}")
+                    local_result = searcher.search_local_addresses(company_name, zip_code)
+                    self.cost_tracker["serpapi_calls"] += 1
+                    if local_result.get("count", 0) > 0:
+                        addresses = local_result["addresses"]
+                        logger.info(f"Serper local search found {len(addresses)} addresses")
+                        result["addresses"] = addresses
+                        result.update(validator.assign_status(addresses, input_zip=zip_code, website_found=True, locations_page_found=True))
+                        cache.set(company_name, result, result["status"], zip_code, company_website)
+                        return result
+                    result.update(validator.assign_status([], input_zip=zip_code, is_interactive=True))
                     cache.set(company_name, result, result["status"], zip_code, company_website)
                     return result
 
@@ -199,6 +295,16 @@ class JobProcessor:
                     parse_result = parser.parse_addresses(playwright_html, use_fallback=True)
 
                 addresses = parse_result.get("addresses", [])
+
+                # Serper local search fallback if Playwright gave 0 addresses
+                if not addresses:
+                    logger.info(f"Playwright returned 0 addresses — trying Serper local search for {company_name}")
+                    local_result = searcher.search_local_addresses(company_name, zip_code)
+                    self.cost_tracker["serpapi_calls"] += 1
+                    if local_result.get("count", 0) > 0:
+                        addresses = local_result["addresses"]
+                        logger.info(f"Serper local search found {len(addresses)} addresses")
+
                 result["addresses"] = addresses
 
                 logger.info(f"Parsed {len(addresses)} addresses from Playwright results")
@@ -219,9 +325,17 @@ class JobProcessor:
                 return result
             
             elif strategy.get("strategy") == "manual_required":
-                result.update(validator.assign_status(
-                    [], input_zip=zip_code, is_interactive=True
-                ))
+                logger.info(f"Interactive locator requires manual input — trying Serper local search for {company_name}")
+                local_result = searcher.search_local_addresses(company_name, zip_code)
+                self.cost_tracker["serpapi_calls"] += 1
+                if local_result.get("count", 0) > 0:
+                    addresses = local_result["addresses"]
+                    logger.info(f"Serper local search found {len(addresses)} addresses")
+                    result["addresses"] = addresses
+                    result.update(validator.assign_status(addresses, input_zip=zip_code, website_found=True, locations_page_found=True))
+                    cache.set(company_name, result, result["status"], zip_code, company_website)
+                    return result
+                result.update(validator.assign_status([], input_zip=zip_code, is_interactive=True))
                 cache.set(company_name, result, result["status"], zip_code, company_website)
                 return result
             
@@ -259,8 +373,35 @@ class JobProcessor:
                 parse_result = parser.parse_addresses(all_pages_content, use_fallback=True)
 
             addresses = parse_result.get("addresses", [])
+
+            # Step 9b: If static scraping yielded nothing and zip provided, retry with Playwright
+            if not addresses and zip_code:
+                logger.info(f"Static scrape yielded 0 addresses — retrying with Playwright for {company_name}")
+                playwright_result = await browser.scrape_with_playwright(locations_url, zip_code)
+                self.cost_tracker["playwright_calls"] += 1
+
+                if playwright_result.get("success"):
+                    pw_parse = parser.parse_addresses(playwright_result.get("html", ""))
+                    if not pw_parse.get("success") or pw_parse.get("count", 0) == 0:
+                        pw_parse = parser.parse_addresses(playwright_result.get("html", ""), use_fallback=True)
+                    addresses = pw_parse.get("addresses", [])
+                    logger.info(f"Playwright fallback parsed {len(addresses)} addresses")
+                else:
+                    logger.warning(f"Playwright fallback also failed: {playwright_result.get('error')}")
+
+            # Step 9c: Local search fallback via Serper if still 0 addresses
+            if not addresses:
+                logger.info(f"All scraping failed — trying Serper local search for {company_name}")
+                local_result = searcher.search_local_addresses(company_name, zip_code)
+                self.cost_tracker["serpapi_calls"] += 1
+                if local_result.get("count", 0) > 0:
+                    addresses = local_result["addresses"]
+                    logger.info(f"Serper local search found {len(addresses)} addresses")
+                else:
+                    logger.warning(f"Serper local search also returned 0 addresses for {company_name}")
+
             result["addresses"] = addresses
-            
+
             logger.info(f"Parsed {len(addresses)} addresses")
 
             # Step 10: Validate and assign status

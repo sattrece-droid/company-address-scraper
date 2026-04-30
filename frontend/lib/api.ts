@@ -1,10 +1,10 @@
 import axios, { AxiosInstance } from "axios";
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+const API_URL = typeof window !== "undefined" ? "" : process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
 
 const api: AxiosInstance = axios.create({
   baseURL: API_URL,
-  timeout: 30000,
+  timeout: 300000, // 5 minutes — jobs can take time for large batches
   headers: {
     "Content-Type": "application/json",
   },

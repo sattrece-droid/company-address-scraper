@@ -1,13 +1,13 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { Suspense, useEffect, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { getJobStatus, downloadResults } from "@/lib/api";
 import { AdPlaceholder } from "@/components/AdPlaceholder";
 import { Spinner } from "@/components/Spinner";
 import { downloadFile, generateTimestamp } from "@/lib/utils";
 
-export default function DownloadPage() {
+function DownloadContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const jobId = searchParams.get("job_id");
@@ -214,5 +214,13 @@ export default function DownloadPage() {
         </div>
       </footer>
     </div>
+  );
+}
+
+export default function DownloadPage() {
+  return (
+    <Suspense fallback={<div className="text-center py-12"><Spinner label="Loading..." /></div>}>
+      <DownloadContent />
+    </Suspense>
   );
 }

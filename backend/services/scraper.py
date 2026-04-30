@@ -39,26 +39,24 @@ class WebScraper:
                 formats = ["markdown", "html"]
             
             # Scrape page with Firecrawl
-            result = self.firecrawl.scrape_url(
+            result = self.firecrawl.scrape(
                 url,
-                params={
-                    "formats": formats,
-                    "waitFor": 2000,  # Wait 2 seconds for JS to load
-                    "timeout": 15000   # 15 second timeout
-                }
+                formats=formats,
+                wait_for=2000,
+                timeout=15000
             )
-            
-            if not result or not result.get("success"):
+
+            if not result:
                 return {
                     "success": False,
                     "error": "Firecrawl scraping failed"
                 }
-            
+
             return {
                 "success": True,
-                "markdown": result.get("markdown", ""),
-                "html": result.get("html", ""),
-                "metadata": result.get("metadata", {}),
+                "markdown": result.markdown or "",
+                "html": result.html or "",
+                "metadata": result.metadata.__dict__ if result.metadata else {},
                 "url": url
             }
         
@@ -86,8 +84,8 @@ class WebScraper:
         """
         # Common location page patterns
         location_patterns = [
-            r'href=["\']([^"\']*(?:location|store|office|branch|find|near)[^"\']*)["\']',
-            r'\[([^\]]*)\]\(([^)]*(?:location|store|office|branch|find|near)[^)]*)\)',  # Markdown links
+            r'href=["\']([^"\']*(?:location|store|office|branch|find|near|find-a-store|store-finder|store-locator|dealer|retailer)[^"\']*)["\']',
+            r'\[([^\]]*)\]\(([^)]*(?:location|store|office|branch|find|near|find-a-store|store-finder|store-locator|dealer|retailer)[^)]*)\)',  # Markdown links
         ]
         
         potential_urls = []
@@ -112,9 +110,13 @@ class WebScraper:
             # Prioritize exact matches
             if "locations" in url_lower or "stores" in url_lower:
                 score += 10
+            if "find-a-store" in url_lower or "store-finder" in url_lower or "store-locator" in url_lower:
+                score += 10
             if "find" in url_lower or "near" in url_lower:
                 score += 5
             if "office" in url_lower or "branch" in url_lower:
+                score += 5
+            if "dealer" in url_lower or "retailer" in url_lower:
                 score += 5
             
             # Penalize non-relevant URLs

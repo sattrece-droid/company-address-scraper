@@ -1,14 +1,13 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { Suspense, useEffect, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { getJobStatus } from "@/lib/api";
 import { ProgressBar } from "@/components/ProgressBar";
 import { Spinner } from "@/components/Spinner";
-import { StatusBadge } from "@/components/StatusBadge";
 import { AdPlaceholder } from "@/components/AdPlaceholder";
 
-export default function ProcessingPage() {
+function ProcessingContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const jobId = searchParams.get("job_id");
@@ -231,5 +230,13 @@ export default function ProcessingPage() {
         </div>
       </div>
     </div>
+  );
+}
+
+export default function ProcessingPage() {
+  return (
+    <Suspense fallback={<div className="text-center py-12"><Spinner label="Loading..." /></div>}>
+      <ProcessingContent />
+    </Suspense>
   );
 }

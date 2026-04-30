@@ -1,1 +1,35 @@
+# Environment
+.env
+.env.local
 backend/.env
+backend/.env.local
+
+# Python
+backend/venv/
+backend/__pycache__/
+backend/*.pyc
+backend/data/
+backend/cache.db
+
+# Node/Next.js
+frontend/node_modules/
+frontend/.next/
+frontend/.env.local
+
+# SSH / PEM keys
+*.pem
+*.key
+
+# Docs
+address-scraping.docx
+low-level-address-scraping.docx
+
+# Test data
+data/test*.xlsx
+data/Test*.xlsx
+company-addresses-*.xlsx
+
+# IDE
+.DS_Store
+.vscode/
+.idea/
