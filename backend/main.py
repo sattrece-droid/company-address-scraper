@@ -35,6 +35,10 @@ async def root():
         "environment": settings.environment
     }
 
+@app.get("/health")
+async def health():
+    return {"status": "ok"}
+
 @app.on_event("startup")
 async def startup_event():
     """Ensure data directory exists on startup."""
